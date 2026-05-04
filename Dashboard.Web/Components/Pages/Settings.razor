@@ -1,0 +1,173 @@
+@page "/settings"
+@implements IDisposable
+@using Dashboard.Web.Core.Abstractions
+@using Dashboard.Web.Core.Models
+@using Dashboard.Web.Core.Plugins
+@inject PluginInstancesStore Store
+@inject Dashboard.Web.Core.Services.UserSettingsService UserSettings
+
+<PageTitle>Settings</PageTitle>
+
+<h1>Dashboard Settings</h1>
+
+<p class="intro">
+    Configure which resources appear on the main dashboard and how they refresh.
+    Changes are saved automatically.
+</p>
+
+@foreach (var module in Store.GetAllModules())
+{
+    var groupEnabled = groupRefreshState.GetValueOrDefault(module.Id, true);
+
+    <div class="settings-card">
+        <div class="settings-card-header">
+            <div class="settings-card-title-block">
+                <h2>@module.DisplayName</h2>
+                <p class="settings-card-desc">@module.Description</p>
+            </div>
+            <label class="settings-group-toggle @(groupEnabled ? "toggle-on" : "toggle-off")">
+                <input type="checkbox" class="visually-hidden"
+                       checked="@groupEnabled"
+                       @onchange="e => OnGroupRefreshChanged(module.Id, (bool)e.Value!)" />
+                <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                <span class="toggle-label">@(groupEnabled ? "Background refresh on" : "Background refresh off")</span>
+            </label>
+        </div>
+
+        @if (module.ItemKeys.Count == 0)
+        {
+            <p class="settings-no-items">No items configured yet — configure this plugin on the <a href="plugins">Plugins</a> page.</p>
+        }
+        else
+        {
+            <table class="settings-table">
+                <thead>
+                    <tr>
+                        <th>Item</th>
+                        <th title="Show this item on the main dashboard page">Dashboard</th>
+                        <th title="Override when this item's data is refreshed">Refresh mode</th>
+                        <th title="Seconds between refreshes (Auto mode only)">Interval (s)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var itemKey in module.ItemKeys)
+                    {
+                        var mid = module.Id;
+                        var ikey = itemKey;
+                        var s = GetLocal(mid, ikey);
+                        var showInterval = !s.RefreshMode.Equals("Manual", StringComparison.OrdinalIgnoreCase);
+                        var defaultInterval = (int)module.RefreshInterval.TotalSeconds;
+
+                        <tr>
+                            <td class="settings-item-name">@itemKey</td>
+                            <td class="settings-cell-center">
+                                <input type="checkbox"
+                                       class="settings-checkbox"
+                                       checked="@s.ShowOnDashboard"
+                                       @onchange="e => OnShowOnDashboard(mid, ikey, (bool)e.Value!)" />
+                            </td>
+                            <td>
+                                <select class="settings-select"
+                                        value="@s.RefreshMode"
+                                        @onchange="e => OnRefreshModeChanged(mid, ikey, e.Value!.ToString()!)">
+                                    <option value="Default">Default (@module.RefreshMode)</option>
+                                    <option value="Auto">Auto</option>
+                                    <option value="Manual">Manual</option>
+                                </select>
+                            </td>
+                            <td>
+                                @if (showInterval)
+                                {
+                                    <input type="number"
+                                           class="settings-interval"
+                                           min="1"
+                                           value="@(s.RefreshIntervalSeconds ?? defaultInterval)"
+                                           @onchange="e => OnIntervalChanged(mid, ikey, e.Value?.ToString())" />
+                                }
+                                else
+                                {
+                                    <span class="settings-na">—</span>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+}
+
+@code {
+    // Local mutable copies of settings — keyed "moduleId::itemKey"
+    private readonly Dictionary<string, ItemSettings> localSettings = [];
+    private readonly Dictionary<string, bool> groupRefreshState = [];
+
+    protected override void OnInitialized()
+    {
+        foreach (var module in Store.GetAllModules())
+        {
+            groupRefreshState[module.Id] = UserSettings.IsGroupRefreshEnabled(module.Id);
+            foreach (var itemKey in module.ItemKeys)
+            {
+                var persisted = UserSettings.GetItemSettings(module.Id, itemKey);
+                localSettings[Key(module.Id, itemKey)] = Clone(persisted);
+            }
+        }
+
+        UserSettings.SettingsChanged += OnExternalChange;
+    }
+
+    private void OnExternalChange() => InvokeAsync(StateHasChanged);
+
+    private ItemSettings GetLocal(string moduleId, string itemKey)
+    {
+        var k = Key(moduleId, itemKey);
+        if (!localSettings.TryGetValue(k, out var s))
+        {
+            s = Clone(UserSettings.GetItemSettings(moduleId, itemKey));
+            localSettings[k] = s;
+        }
+        return s;
+    }
+
+    private void OnGroupRefreshChanged(string moduleId, bool enabled)
+    {
+        groupRefreshState[moduleId] = enabled;
+        UserSettings.SetGroupRefreshEnabled(moduleId, enabled);
+    }
+
+    private void OnShowOnDashboard(string moduleId, string itemKey, bool value)
+    {
+        var s = GetLocal(moduleId, itemKey);
+        s.ShowOnDashboard = value;
+        UserSettings.SetItemSettings(moduleId, itemKey, s);
+    }
+
+    private void OnRefreshModeChanged(string moduleId, string itemKey, string value)
+    {
+        var s = GetLocal(moduleId, itemKey);
+        s.RefreshMode = value;
+        UserSettings.SetItemSettings(moduleId, itemKey, s);
+    }
+
+    private void OnIntervalChanged(string moduleId, string itemKey, string? raw)
+    {
+        if (int.TryParse(raw, out var v) && v >= 1)
+        {
+            var s = GetLocal(moduleId, itemKey);
+            s.RefreshIntervalSeconds = v;
+            UserSettings.SetItemSettings(moduleId, itemKey, s);
+        }
+    }
+
+    private static string Key(string moduleId, string itemKey) => $"{moduleId}::{itemKey}";
+
+    private static ItemSettings Clone(ItemSettings src) => new()
+    {
+        ShowOnDashboard = src.ShowOnDashboard,
+        RefreshMode = src.RefreshMode,
+        RefreshIntervalSeconds = src.RefreshIntervalSeconds
+    };
+
+    public void Dispose() => UserSettings.SettingsChanged -= OnExternalChange;
+}

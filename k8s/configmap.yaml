@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-config
+  namespace: dashboard
+data:
+  ASPNETCORE_ENVIRONMENT: "Production"
+  ASPNETCORE_URLS: "http://+:8080"
+  DashboardModules__AppInsightsKql__Enabled: "false"
+  DashboardModules__AppInsightsKql__Title: "InvalidOperationException Watch"
+  DashboardModules__AppInsightsKql__AppId: "REPLACE_WITH_APP_INSIGHTS_APP_ID"
+  DashboardModules__AppInsightsKql__Timespan: "PT24H"
+  DashboardModules__AppInsightsKql__MaxAllowedMatches: "0"

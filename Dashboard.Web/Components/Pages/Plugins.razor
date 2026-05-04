@@ -1,0 +1,614 @@
+@page "/plugins"
+@using System.Globalization
+@using System.Text.Json.Nodes
+@using Dashboard.Web.Core.Plugins
+@inject PluginInstancesStore Store
+
+<PageTitle>Plugins</PageTitle>
+
+<h1>Plugins</h1>
+
+<p class="intro">
+    Add plugin instances and configure their settings. Changes are saved to <code>pluginInstances.json</code>.
+</p>
+
+<section class="plugin-section">
+    <h2>Available Types</h2>
+    <div class="plugin-type-grid">
+        @foreach (var pluginType in pluginTypes)
+        {
+            <article class="plugin-type-card">
+                <h3>@pluginType.DisplayName</h3>
+                <p>@pluginType.Description</p>
+                <button class="plugin-btn plugin-btn-primary" type="button" @onclick="() => AddInstance(pluginType.TypeId)">
+                    + Add
+                </button>
+            </article>
+        }
+    </div>
+</section>
+
+<section class="plugin-section">
+    <h2>Configured Plugins</h2>
+
+    @if (instances.Count == 0)
+    {
+        <p class="plugin-empty">No plugins configured yet.</p>
+    }
+    else
+    {
+        <div class="plugin-instance-list">
+            @foreach (var instance in instances)
+            {
+                var pluginType = GetPluginType(instance.TypeId);
+                var isEditing = editingId == instance.InstanceId;
+                var loadError = Store.GetInstanceLoadError(instance);
+                var hasLoadError = !string.IsNullOrWhiteSpace(loadError);
+
+                <article class="plugin-instance-card">
+                    <div class="plugin-instance-header">
+                        <div>
+                            <h3>@instance.Name</h3>
+                            <div class="plugin-meta">
+                                <span class="plugin-badge">@pluginType?.DisplayName ?? instance.TypeId</span>
+                                <span class="plugin-id">ID: @instance.InstanceId</span>
+                                <span class="plugin-status-badge @(hasLoadError ? "plugin-status-error" : "plugin-status-ok")">
+                                    @(hasLoadError ? "Config Error" : "Ready")
+                                </span>
+                            </div>
+                        </div>
+                        <div class="plugin-instance-actions">
+                            <label class="plugin-enabled-toggle">
+                                <input type="checkbox"
+                                       checked="@instance.Enabled"
+                                       @onchange="e => ToggleEnabled(instance, (bool)e.Value!)" />
+                                <span>Enabled</span>
+                            </label>
+                            <button class="plugin-btn" type="button" @onclick="() => ToggleEdit(instance)">
+                                @(isEditing ? "Close" : "Configure")
+                            </button>
+                            <button class="plugin-btn plugin-btn-danger" type="button" @onclick="() => DeleteInstance(instance.InstanceId)">
+                                Delete
+                            </button>
+                        </div>
+                    </div>
+
+                    @if (hasLoadError)
+                    {
+                        <div class="plugin-instance-error" role="alert">
+                            @loadError
+                        </div>
+                    }
+
+                    @if (isEditing && editConfig is not null && pluginType is not null)
+                    {
+                        <div class="plugin-edit-form">
+                            @foreach (var field in pluginType.Fields)
+                            {
+                                <div class="plugin-field-row">
+                                    <label class="plugin-field-label" for="@GetFieldDomId(instance.InstanceId, field.Key)">
+                                        @field.Label
+                                        @if (field.Required)
+                                        {
+                                            <span class="plugin-required">*</span>
+                                        }
+                                    </label>
+
+                                    <div class="plugin-field-value">
+                                        @if (field.Type == PluginFieldType.Boolean)
+                                        {
+                                            <label class="plugin-checkbox-label">
+                                                <input id="@GetFieldDomId(instance.InstanceId, field.Key)"
+                                                       type="checkbox"
+                                                       checked="@GetBool(field.Key, ParseBool(field.DefaultValue))"
+                                                       @onchange="e => SetBool(field.Key, (bool)e.Value!)" />
+                                                <span>Enabled</span>
+                                            </label>
+                                        }
+                                        else if (field.Type == PluginFieldType.Select)
+                                        {
+                                            <select id="@GetFieldDomId(instance.InstanceId, field.Key)"
+                                                    class="plugin-input"
+                                                    value="@GetStr(field.Key, field.DefaultValue)"
+                                                    @onchange="e => SetStr(field.Key, e.Value?.ToString() ?? string.Empty)">
+                                                @foreach (var option in field.SelectOptions ?? [])
+                                                {
+                                                    <option value="@option">@option</option>
+                                                }
+                                            </select>
+                                        }
+                                        else if (field.Type == PluginFieldType.Textarea)
+                                        {
+                                            <textarea id="@GetFieldDomId(instance.InstanceId, field.Key)"
+                                                      class="plugin-input plugin-textarea"
+                                                      placeholder="@field.Placeholder"
+                                                      value="@GetStr(field.Key, field.DefaultValue)"
+                                                      @onchange="e => SetStr(field.Key, e.Value?.ToString() ?? string.Empty)"></textarea>
+                                        }
+                                        else if (field.Type == PluginFieldType.Number)
+                                        {
+                                            <input id="@GetFieldDomId(instance.InstanceId, field.Key)"
+                                                   class="plugin-input"
+                                                   type="number"
+                                                   step="any"
+                                                   placeholder="@field.Placeholder"
+                                                   value="@GetNumberStr(field.Key, field.DefaultValue)"
+                                                   @onchange="e => SetNumber(field.Key, e.Value?.ToString() ?? string.Empty)" />
+                                        }
+                                        else if (field.Type == PluginFieldType.Password)
+                                        {
+                                            <input id="@GetFieldDomId(instance.InstanceId, field.Key)"
+                                                   class="plugin-input"
+                                                   type="password"
+                                                   placeholder="@field.Placeholder"
+                                                   value="@GetStr(field.Key, field.DefaultValue)"
+                                                   @onchange="e => SetStr(field.Key, e.Value?.ToString() ?? string.Empty)" />
+                                        }
+                                        else if (field.Type == PluginFieldType.Url)
+                                        {
+                                            <input id="@GetFieldDomId(instance.InstanceId, field.Key)"
+                                                   class="plugin-input"
+                                                   type="url"
+                                                   placeholder="@field.Placeholder"
+                                                   value="@GetStr(field.Key, field.DefaultValue)"
+                                                   @onchange="e => SetStr(field.Key, e.Value?.ToString() ?? string.Empty)" />
+                                        }
+                                        else if (field.Type == PluginFieldType.ItemList)
+                                        {
+                                            var rows = GetRows(field.Key);
+                                            <div class="plugin-item-list-wrap">
+                                                <table class="plugin-item-table">
+                                                    <thead>
+                                                        <tr>
+                                                            @foreach (var subField in field.ItemFields ?? [])
+                                                            {
+                                                                <th>@subField.Label</th>
+                                                            }
+                                                            <th></th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        @if (rows.Count == 0)
+                                                        {
+                                                            <tr>
+                                                                <td class="plugin-item-empty" colspan="@((field.ItemFields?.Length ?? 0) + 1)">No items configured.</td>
+                                                            </tr>
+                                                        }
+                                                        else
+                                                        {
+                                                            @for (var i = 0; i < rows.Count; i++)
+                                                            {
+                                                                var row = rows[i];
+                                                                <tr>
+                                                                    @foreach (var subField in field.ItemFields ?? [])
+                                                                    {
+                                                                        <td>
+                                                                            @if (subField.Type == PluginFieldType.Boolean)
+                                                                            {
+                                                                                <input type="checkbox"
+                                                                                       checked="@ParseBool(GetRowValue(row, subField.Key, subField.DefaultValue))"
+                                                                                       @onchange="e => SetRowBool(field.Key, i, subField.Key, (bool)e.Value!)" />
+                                                                            }
+                                                                            else if (subField.Type == PluginFieldType.Number)
+                                                                            {
+                                                                                <input class="plugin-item-input"
+                                                                                       type="number"
+                                                                                       step="any"
+                                                                                       value="@GetRowValue(row, subField.Key, subField.DefaultValue)"
+                                                                                       @onchange="e => SetRowValue(field.Key, i, subField.Key, e.Value?.ToString() ?? string.Empty)" />
+                                                                            }
+                                                                            else if (subField.Type == PluginFieldType.Url)
+                                                                            {
+                                                                                <input class="plugin-item-input"
+                                                                                       type="url"
+                                                                                       placeholder="@subField.Placeholder"
+                                                                                       value="@GetRowValue(row, subField.Key, subField.DefaultValue)"
+                                                                                       @onchange="e => SetRowValue(field.Key, i, subField.Key, e.Value?.ToString() ?? string.Empty)" />
+                                                                            }
+                                                                            else if (subField.Type == PluginFieldType.Password)
+                                                                            {
+                                                                                <input class="plugin-item-input"
+                                                                                       type="password"
+                                                                                       value="@GetRowValue(row, subField.Key, subField.DefaultValue)"
+                                                                                       @onchange="e => SetRowValue(field.Key, i, subField.Key, e.Value?.ToString() ?? string.Empty)" />
+                                                                            }
+                                                                            else
+                                                                            {
+                                                                                <input class="plugin-item-input"
+                                                                                       type="text"
+                                                                                       placeholder="@subField.Placeholder"
+                                                                                       value="@GetRowValue(row, subField.Key, subField.DefaultValue)"
+                                                                                       @onchange="e => SetRowValue(field.Key, i, subField.Key, e.Value?.ToString() ?? string.Empty)" />
+                                                                            }
+                                                                        </td>
+                                                                    }
+                                                                    <td class="plugin-item-actions">
+                                                                        <button class="plugin-btn plugin-btn-danger" type="button" @onclick="() => RemoveRow(field.Key, i)">Delete</button>
+                                                                    </td>
+                                                                </tr>
+                                                            }
+                                                        }
+                                                    </tbody>
+                                                </table>
+
+                                                <button class="plugin-btn plugin-btn-secondary" type="button" @onclick="() => AddRow(field)">+ Add Row</button>
+                                            </div>
+                                        }
+                                        else
+                                        {
+                                            <input id="@GetFieldDomId(instance.InstanceId, field.Key)"
+                                                   class="plugin-input"
+                                                   type="text"
+                                                   placeholder="@field.Placeholder"
+                                                   value="@GetStr(field.Key, field.DefaultValue)"
+                                                   @onchange="e => SetStr(field.Key, e.Value?.ToString() ?? string.Empty)" />
+                                        }
+
+                                        @if (!string.IsNullOrWhiteSpace(field.Help))
+                                        {
+                                            <div class="plugin-help">@field.Help</div>
+                                        }
+                                    </div>
+                                </div>
+                            }
+
+                            <div class="plugin-edit-actions">
+                                <button class="plugin-btn plugin-btn-primary" type="button" @onclick="SaveEdit">Save</button>
+                                <button class="plugin-btn" type="button" @onclick="CancelEdit">Cancel</button>
+                            </div>
+                        </div>
+                    }
+                </article>
+            }
+        </div>
+    }
+</section>
+
+@code {
+    private List<PluginInstanceConfig> instances = [];
+    private IReadOnlyList<IPluginType> pluginTypes = [];
+
+    private string? editingId;
+    private JsonObject? editConfig;
+    private readonly Dictionary<string, List<Dictionary<string, string>>> editLists = new(StringComparer.OrdinalIgnoreCase);
+
+    protected override void OnInitialized()
+    {
+        Reload();
+    }
+
+    private void Reload()
+    {
+        pluginTypes = Store.GetPluginTypes()
+            .OrderBy(t => t.DisplayName)
+            .ToList();
+
+        instances = Store.GetAllInstances()
+            .OrderBy(i => i.Name)
+            .ToList();
+
+        if (editingId is not null && instances.All(i => i.InstanceId != editingId))
+        {
+            CancelEdit();
+        }
+    }
+
+    private IPluginType? GetPluginType(string typeId) => Store.GetPluginType(typeId);
+
+    private void AddInstance(string typeId)
+    {
+        var pluginType = GetPluginType(typeId);
+        if (pluginType is null)
+        {
+            return;
+        }
+
+        var instance = pluginType.CreateDefault();
+        if (string.IsNullOrWhiteSpace(instance.Name))
+        {
+            instance.Name = pluginType.DisplayName;
+        }
+
+        Store.AddInstance(instance);
+        Reload();
+
+        var added = instances.FirstOrDefault(i => i.InstanceId == instance.InstanceId);
+        if (added is not null)
+        {
+            StartEdit(added);
+        }
+    }
+
+    private void ToggleEnabled(PluginInstanceConfig instance, bool enabled)
+    {
+        var updated = new PluginInstanceConfig
+        {
+            InstanceId = instance.InstanceId,
+            TypeId = instance.TypeId,
+            Name = instance.Name,
+            Enabled = enabled,
+            Config = CloneConfig(instance.Config)
+        };
+
+        Store.UpdateInstance(updated);
+        Reload();
+    }
+
+    private void DeleteInstance(string instanceId)
+    {
+        Store.RemoveInstance(instanceId);
+
+        if (editingId == instanceId)
+        {
+            CancelEdit();
+        }
+
+        Reload();
+    }
+
+    private void ToggleEdit(PluginInstanceConfig instance)
+    {
+        if (editingId == instance.InstanceId)
+        {
+            CancelEdit();
+            return;
+        }
+
+        StartEdit(instance);
+    }
+
+    private void StartEdit(PluginInstanceConfig instance)
+    {
+        editingId = instance.InstanceId;
+        editConfig = CloneConfig(instance.Config);
+        editLists.Clear();
+
+        var pluginType = GetPluginType(instance.TypeId);
+        if (pluginType is null)
+        {
+            return;
+        }
+
+        foreach (var field in pluginType.Fields.Where(f => f.Type == PluginFieldType.ItemList))
+        {
+            editLists[field.Key] = LoadItemList(editConfig, field);
+        }
+    }
+
+    private void SaveEdit()
+    {
+        var instance = GetEditingInstance();
+        if (instance is null || editConfig is null)
+        {
+            return;
+        }
+
+        var pluginType = GetPluginType(instance.TypeId);
+        if (pluginType is null)
+        {
+            return;
+        }
+
+        foreach (var field in pluginType.Fields.Where(f => f.Type == PluginFieldType.ItemList))
+        {
+            var rows = GetRows(field.Key);
+            editConfig[field.Key] = BuildItemListJson(rows, field.ItemFields ?? []);
+        }
+
+        var displayName = PluginInstancesStore.ReadString(editConfig["displayName"], instance.Name);
+
+        var updated = new PluginInstanceConfig
+        {
+            InstanceId = instance.InstanceId,
+            TypeId = instance.TypeId,
+            Name = string.IsNullOrWhiteSpace(displayName) ? instance.Name : displayName,
+            Enabled = instance.Enabled,
+            Config = editConfig
+        };
+
+        Store.UpdateInstance(updated);
+        Reload();
+        CancelEdit();
+    }
+
+    private void CancelEdit()
+    {
+        editingId = null;
+        editConfig = null;
+        editLists.Clear();
+    }
+
+    private PluginInstanceConfig? GetEditingInstance() =>
+        editingId is null ? null : instances.FirstOrDefault(i => i.InstanceId == editingId);
+
+    private string GetStr(string key, string? fallback = "") =>
+        PluginInstancesStore.ReadString(editConfig?[key], fallback ?? string.Empty);
+
+    private void SetStr(string key, string value)
+    {
+        if (editConfig is null)
+        {
+            return;
+        }
+
+        editConfig[key] = JsonValue.Create(value);
+    }
+
+    private bool GetBool(string key, bool fallback = false) =>
+        PluginInstancesStore.ReadBool(editConfig?[key], fallback);
+
+    private void SetBool(string key, bool value)
+    {
+        if (editConfig is null)
+        {
+            return;
+        }
+
+        editConfig[key] = JsonValue.Create(value);
+    }
+
+    private string GetNumberStr(string key, string? fallback = "0")
+    {
+        if (editConfig is null)
+        {
+            return fallback ?? "0";
+        }
+
+        if (editConfig.TryGetPropertyValue(key, out var node) && node is not null)
+        {
+            return node.ToString();
+        }
+
+        return fallback ?? "0";
+    }
+
+    private void SetNumber(string key, string value)
+    {
+        if (editConfig is null)
+        {
+            return;
+        }
+
+        if (TryParseDouble(value, out var parsed))
+        {
+            editConfig[key] = JsonValue.Create(parsed);
+            return;
+        }
+
+        editConfig[key] = JsonValue.Create(0d);
+    }
+
+    private List<Dictionary<string, string>> GetRows(string key)
+    {
+        if (!editLists.TryGetValue(key, out var rows))
+        {
+            rows = [];
+            editLists[key] = rows;
+        }
+
+        return rows;
+    }
+
+    private void AddRow(PluginField listField)
+    {
+        var rows = GetRows(listField.Key);
+        var row = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var subField in listField.ItemFields ?? [])
+        {
+            row[subField.Key] = subField.DefaultValue ?? string.Empty;
+        }
+
+        rows.Add(row);
+    }
+
+    private void RemoveRow(string fieldKey, int rowIndex)
+    {
+        var rows = GetRows(fieldKey);
+        if (rowIndex < 0 || rowIndex >= rows.Count)
+        {
+            return;
+        }
+
+        rows.RemoveAt(rowIndex);
+    }
+
+    private void SetRowValue(string fieldKey, int rowIndex, string itemKey, string value)
+    {
+        var rows = GetRows(fieldKey);
+        if (rowIndex < 0 || rowIndex >= rows.Count)
+        {
+            return;
+        }
+
+        rows[rowIndex][itemKey] = value;
+    }
+
+    private void SetRowBool(string fieldKey, int rowIndex, string itemKey, bool value)
+    {
+        SetRowValue(fieldKey, rowIndex, itemKey, value ? "true" : "false");
+    }
+
+    private static string GetRowValue(Dictionary<string, string> row, string key, string? fallback = "") =>
+        row.TryGetValue(key, out var value) ? value : fallback ?? string.Empty;
+
+    private static List<Dictionary<string, string>> LoadItemList(JsonObject config, PluginField field)
+    {
+        var rows = new List<Dictionary<string, string>>();
+
+        var items = config[field.Key] as JsonArray;
+        if (items is null)
+        {
+            return rows;
+        }
+
+        foreach (var item in items.OfType<JsonObject>())
+        {
+            var row = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var subField in field.ItemFields ?? [])
+            {
+                row[subField.Key] = PluginInstancesStore.ReadString(item[subField.Key], subField.DefaultValue ?? string.Empty);
+            }
+
+            rows.Add(row);
+        }
+
+        return rows;
+    }
+
+    private static JsonArray BuildItemListJson(List<Dictionary<string, string>> rows, PluginField[] subFields)
+    {
+        var result = new JsonArray();
+
+        foreach (var row in rows)
+        {
+            var obj = new JsonObject();
+            foreach (var subField in subFields)
+            {
+                var raw = GetRowValue(row, subField.Key, subField.DefaultValue);
+                obj[subField.Key] = ConvertToNode(raw, subField.Type);
+            }
+
+            result.Add(obj);
+        }
+
+        return result;
+    }
+
+    private static JsonNode? ConvertToNode(string raw, PluginFieldType type)
+    {
+        if (type == PluginFieldType.Boolean)
+        {
+            return JsonValue.Create(ParseBool(raw));
+        }
+
+        if (type == PluginFieldType.Number)
+        {
+            if (TryParseDouble(raw, out var parsed))
+            {
+                return JsonValue.Create(parsed);
+            }
+
+            return JsonValue.Create(0d);
+        }
+
+        return JsonValue.Create(raw);
+    }
+
+    private static bool TryParseDouble(string raw, out double result)
+    {
+        if (double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out result))
+        {
+            return true;
+        }
+
+        return double.TryParse(raw, NumberStyles.Float, CultureInfo.CurrentCulture, out result);
+    }
+
+    private static bool ParseBool(string? raw) => bool.TryParse(raw, out var parsed) && parsed;
+
+    private static JsonObject CloneConfig(JsonObject config) =>
+        JsonNode.Parse(config.ToJsonString())?.AsObject() ?? new JsonObject();
+
+    private static string GetFieldDomId(string instanceId, string key) => $"plugin-{instanceId}-{key}";
+}

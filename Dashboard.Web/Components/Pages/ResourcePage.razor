@@ -1,0 +1,192 @@
+@page "/resources/{GroupName}"
+@implements IAsyncDisposable
+@using Dashboard.Web.Core.Abstractions
+@using Dashboard.Web.Core.Models
+@inject Dashboard.Web.Core.Services.DashboardDataService DashboardDataService
+@inject Dashboard.Web.Core.Services.UserSettingsService UserSettings
+@using Dashboard.Web.Core.Plugins
+@inject PluginInstancesStore Store
+
+<PageTitle>@GroupName</PageTitle>
+
+<h1>@GroupName</h1>
+
+@if (!groupModules.Any())
+{
+    <p>No modules configured for this page.</p>
+}
+else
+{
+    @foreach (var module in groupModules)
+    {
+        var moduleWidgets = widgetsByModule.GetValueOrDefault(module.Id, []);
+        <section class="resource-section">
+            <div class="resource-section-header">
+                <div>
+                    <h2>@module.DisplayName</h2>
+                    <p class="resource-description">@module.Description</p>
+                </div>
+                <div class="resource-refresh-controls">
+                    @if (module.RefreshMode == RefreshMode.Auto && UserSettings.IsGroupRefreshEnabled(module.Id))
+                    {
+                        <span class="refresh-badge refresh-auto">Auto every @FormatInterval(module.RefreshInterval)</span>
+                    }
+                    else
+                    {
+                        <span class="refresh-badge refresh-manual">@(UserSettings.IsGroupRefreshEnabled(module.Id) ? "Manual" : "Refresh off")</span>
+                    }
+                    <button class="refresh-btn" @onclick="() => TriggerModuleRefreshAsync(module.Id)"
+                            disabled="@refreshing.Contains(module.Id)">
+                        @(refreshing.Contains(module.Id) ? "Refreshing\u2026" : "\u21bb Refresh")
+                    </button>
+                    <a class="settings-link-small" href="settings" title="Configure in Settings">&#9881;</a>
+                </div>
+            </div>
+
+            @if (moduleWidgets.Count == 0)
+            {
+                <p class="resource-empty">No data collected yet.</p>
+            }
+            else
+            {
+                <table class="resource-table">
+                    <thead>
+                        <tr>
+                            <th>Status</th>
+                            <th>Title</th>
+                            <th>Summary</th>
+                            <th>Metrics</th>
+                            <th>Refresh</th>
+                            <th>Last Updated</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var widget in moduleWidgets)
+                        {
+                            var itemMode = UserSettings.GetEffectiveItemRefreshMode(module.Id, widget.ItemKey, module.RefreshMode);
+                            <tr>
+                                <td>
+                                    <span class="status-pill status-@GetCss(widget.Status)">@widget.Status</span>
+                                </td>
+                                <td>@widget.Title</td>
+                                <td>@widget.Summary</td>
+                                <td>
+                                    @if (widget.Metrics is { Count: > 0 })
+                                    {
+                                        <dl class="metric-inline">
+                                            @foreach (var metric in widget.Metrics)
+                                            {
+                                                <dt>@metric.Name</dt>
+                                                <dd>@metric.Value</dd>
+                                            }
+                                        </dl>
+                                    }
+                                </td>
+                                <td>
+                                    <span class="refresh-badge @(itemMode == RefreshMode.Auto ? "refresh-auto" : "refresh-manual")">
+                                        @(itemMode == RefreshMode.Auto ? "Auto" : "Manual")
+                                    </span>
+                                </td>
+                                <td class="ts">@widget.TimestampUtc.LocalDateTime.ToString("HH:mm:ss")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </section>
+    }
+}
+
+@code {
+    [Parameter] public string GroupName { get; set; } = string.Empty;
+
+    private readonly CancellationTokenSource cts = new();
+    private readonly HashSet<string> refreshing = [];
+    private List<IDashboardModule> groupModules = [];
+    private Dictionary<string, IReadOnlyList<DashboardWidget>> widgetsByModule = [];
+    private Task? refreshTask;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        groupModules = Store.GetAllModules()
+            .Where(m => string.Equals(m.GetEffectivePageGroup(), GroupName, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        await DashboardDataService.InitializeAsync(cts.Token);
+        RefreshWidgets();
+
+        if (refreshTask is null)
+        {
+            refreshTask = Task.Run(AutoRefreshLoopAsync);
+        }
+    }
+
+    private async Task AutoRefreshLoopAsync()
+    {
+        // Refresh the UI view every 5 s from the cache; the background service
+        // re-collects Auto modules on their own intervals.
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        while (!cts.IsCancellationRequested && await timer.WaitForNextTickAsync(cts.Token))
+        {
+            RefreshWidgets();
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void RefreshWidgets()
+    {
+        var snapshot = DashboardDataService.GetWidgetsForGroup(GroupName);
+        widgetsByModule = snapshot
+            .GroupBy(w => w.ModuleId)
+            .ToDictionary(g => g.Key, g => (IReadOnlyList<DashboardWidget>)g.ToList());
+    }
+
+    private async Task TriggerModuleRefreshAsync(string moduleId)
+    {
+        if (!refreshing.Add(moduleId))
+        {
+            return;
+        }
+
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            await DashboardDataService.TriggerRefreshAsync(moduleId, cts.Token);
+            RefreshWidgets();
+        }
+        finally
+        {
+            refreshing.Remove(moduleId);
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private static string GetCss(WidgetStatus status) => status switch
+    {
+        WidgetStatus.Healthy => "healthy",
+        WidgetStatus.Warning => "warning",
+        WidgetStatus.Critical => "critical",
+        _ => "unknown"
+    };
+
+    private static string FormatInterval(TimeSpan ts) =>
+        ts.TotalSeconds < 60 ? $"{ts.TotalSeconds:0} s"
+        : ts.TotalMinutes < 60 ? $"{ts.TotalMinutes:0} min"
+        : $"{ts.TotalHours:0} hr";
+
+    public async ValueTask DisposeAsync()
+    {
+        cts.Cancel();
+        if (refreshTask is not null)
+        {
+            try
+            {
+                await refreshTask;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+    }
+}

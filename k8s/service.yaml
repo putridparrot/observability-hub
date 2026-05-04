@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard-web
+  namespace: dashboard
+spec:
+  selector:
+    app: dashboard-web
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  type: ClusterIP

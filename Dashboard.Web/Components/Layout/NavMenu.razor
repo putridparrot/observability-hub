@@ -1,0 +1,53 @@
+﻿@using Dashboard.Web.Core.Abstractions
+@using Dashboard.Web.Core.Plugins
+@inject PluginInstancesStore Store
+
+<div class="top-row ps-3 navbar navbar-dark">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="">Ops Hub</a>
+    </div>
+</div>
+
+<input type="checkbox" title="Navigation menu" class="navbar-toggler" />
+
+<div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
+    <nav class="nav flex-column">
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
+                <span class="bi bi-grid-1x2-fill-nav-menu" aria-hidden="true"></span> Dashboard
+            </NavLink>
+        </div>
+
+        @foreach (var group in PageGroups)
+        {
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="@($"resources/{Uri.EscapeDataString(group)}")">
+                    <span class="bi bi-table-nav-menu" aria-hidden="true"></span> @group
+                </NavLink>
+            </div>
+        }
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="settings">
+                <span class="bi bi-gear-fill-nav-menu" aria-hidden="true"></span> Settings
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="plugins">
+                <span class="bi bi-puzzle-fill-nav-menu" aria-hidden="true"></span> Plugins
+            </NavLink>
+        </div>
+    </nav>
+</div>
+
+@code {
+    // Every module gets a nav entry; if PageGroup is null, DisplayName is the fallback.
+    private IReadOnlyList<string> PageGroups =>
+        Store.GetAllModules()
+            .Select(m => m.GetEffectivePageGroup())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order()
+            .ToList();
+}
+

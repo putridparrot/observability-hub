@@ -1,0 +1,130 @@
+﻿@page "/"
+@implements IAsyncDisposable
+@inject Dashboard.Web.Core.Services.DashboardDataService DashboardDataService
+@inject Dashboard.Web.Core.Plugins.PluginInstancesStore PluginStore
+
+<PageTitle>Home</PageTitle>
+
+<h1>Operations Dashboard</h1>
+
+<p class="intro">
+	This view is plugin-driven. Add new modules and the dashboard automatically renders their widgets.
+</p>
+
+@if (isLoading)
+{
+	<p>Loading modules...</p>
+}
+else if (widgets.Count == 0)
+{
+	<p>@emptyStateMessage</p>
+}
+else
+{
+	<div class="dashboard-grid">
+		@foreach (var widget in widgets)
+		{
+			<section class="dashboard-card status-@GetCss(widget.Status)">
+				<header>
+					<div class="module">@widget.ModuleName</div>
+					<h2>@widget.Title</h2>
+				</header>
+
+				<p class="summary">@widget.Summary</p>
+
+				@if (widget.Metrics is { Count: > 0 })
+				{
+					<dl>
+						@foreach (var metric in widget.Metrics)
+						{
+							<dt>@metric.Name</dt>
+							<dd>@metric.Value</dd>
+						}
+					</dl>
+				}
+
+				<footer>Updated @widget.TimestampUtc.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss")</footer>
+			</section>
+		}
+	</div>
+}
+
+@code {
+	private readonly CancellationTokenSource refreshTokenSource = new();
+	private List<DashboardWidget> widgets = [];
+	private Task? refreshTask;
+	private bool isLoading = true;
+	private string emptyStateMessage = "No widgets available yet. Add or configure plugins on the Plugins page.";
+
+	protected override async Task OnInitializedAsync()
+	{
+		try
+		{
+			using var initTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+			using var initToken = CancellationTokenSource.CreateLinkedTokenSource(refreshTokenSource.Token, initTimeout.Token);
+
+			await DashboardDataService.InitializeAsync(initToken.Token);
+			await RefreshSnapshotAsync();
+		}
+		catch (OperationCanceledException) when (!refreshTokenSource.IsCancellationRequested)
+		{
+			emptyStateMessage = "Module initialization timed out. Check plugin endpoints and refresh the page.";
+		}
+		finally
+		{
+			isLoading = false;
+		}
+
+		refreshTask = Task.Run(RefreshLoopAsync);
+	}
+
+	private async Task RefreshLoopAsync()
+	{
+		using var timer = new PeriodicTimer(TimeSpan.FromSeconds(15));
+		while (!refreshTokenSource.IsCancellationRequested && await timer.WaitForNextTickAsync(refreshTokenSource.Token))
+		{
+			await RefreshSnapshotAsync();
+			await InvokeAsync(StateHasChanged);
+		}
+	}
+
+	private Task RefreshSnapshotAsync()
+	{
+		widgets = DashboardDataService.GetDashboardWidgets().ToList();
+
+		if (widgets.Count == 0)
+		{
+			var enabledPluginCount = PluginStore.GetAllInstances().Count(i => i.Enabled);
+			emptyStateMessage = enabledPluginCount == 0
+				? "No enabled plugins found. Enable or add plugins on the Plugins page."
+				: "Plugins are enabled but no widgets are visible on Home. Check 'Show on Dashboard' in plugin config and dashboard item visibility in Settings.";
+		}
+
+		return Task.CompletedTask;
+	}
+
+	private static string GetCss(WidgetStatus status) => status switch
+	{
+		WidgetStatus.Healthy => "healthy",
+		WidgetStatus.Warning => "warning",
+		WidgetStatus.Critical => "critical",
+		_ => "unknown"
+	};
+
+	public async ValueTask DisposeAsync()
+	{
+		refreshTokenSource.Cancel();
+		if (refreshTask is not null)
+		{
+			try
+			{
+				await refreshTask;
+			}
+			catch (OperationCanceledException)
+			{
+			}
+		}
+
+		refreshTokenSource.Dispose();
+	}
+}
